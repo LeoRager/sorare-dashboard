@@ -1,0 +1,9 @@
+bcrypt
+requests
+gql
+graphql-core
+pandas
+numpy
+soccerdata
+thefuzz
+streamlit
