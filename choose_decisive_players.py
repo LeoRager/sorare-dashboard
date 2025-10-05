@@ -353,7 +353,7 @@ def analyse_players(df):
     filtered = filtered.sort_values(by="prob_scoring", ascending=False)
 
     # List of new names for the first few columns
-    new_names = ['first_name', 'last_name', 'team', 'Starting Likelihood (%)', 'Odds Reliability', 'Next Opponent']
+    new_names = ['First Name', 'Last Name', 'Team', 'Starting Likelihood (%)', 'Odds Reliability', 'Next Opponent']
 
     # Replace the first few columns while keeping the rest
     filtered.columns = new_names + list(filtered.columns[len(new_names):])
@@ -375,33 +375,35 @@ if "EMAIL" not in st.session_state:
 if "PASSWORD" not in st.session_state:
     st.session_state.PASSWORD = ""
 
+
+# Callback for sign in
+def handle_sign_in():
+    EMAIL = st.session_state.EMAIL
+    PASSWORD = st.session_state.PASSWORD
+
+    with st.spinner("Signing in..."):
+        local_schema = load_local_schema("schema.graphql")
+        salt = get_salt_for_email(EMAIL)
+        hashed = hash_password(PASSWORD, salt)
+        sign_in_client = make_client(local_schema=local_schema)
+        sign_in_result = sign_in_with_password(EMAIL, hashed, AUD, sign_in_client)
+        st.session_state.sign_in_result = sign_in_result
+
+    if sign_in_result.get("otpSessionChallenge"):
+        st.session_state.step = 2
+    elif sign_in_result.get("errors"):
+        st.error(f"Sign in errors: {sign_in_result['errors']}")
+    else:
+        st.session_state.token = sign_in_result["jwtToken"]["token"]
+        st.session_state.step = 3
+
+
 # Step 1: Email and password form
 if st.session_state.step == 1:
     with st.form("login_form"):
-        EMAIL = st.text_input("Enter your email")
-        PASSWORD = st.text_input("Enter your password", type="password")
-        submitted = st.form_submit_button("Submit")
-
-    if submitted:
-        st.session_state.EMAIL = EMAIL
-        st.session_state.PASSWORD = PASSWORD
-
-        with st.spinner("Signing in..."):
-            local_schema = load_local_schema("schema.graphql")
-            salt = get_salt_for_email(EMAIL)
-            hashed = hash_password(PASSWORD, salt)
-            sign_in_client = make_client(local_schema=local_schema)
-            sign_in_result = sign_in_with_password(EMAIL, hashed, AUD, sign_in_client)
-            st.session_state.sign_in_result = sign_in_result
-
-        # Check if 2FA is required
-        if sign_in_result.get("otpSessionChallenge"):
-            st.session_state.step = 2
-        elif sign_in_result.get("errors"):
-            st.error(f"Sign in errors: {sign_in_result['errors']}")
-        else:
-            st.session_state.token = sign_in_result["jwtToken"]["token"]
-            st.session_state.step = 3
+        st.text_input("Enter your email", key="EMAIL")
+        st.text_input("Enter your password", type="password", key="PASSWORD")
+        st.form_submit_button("Submit", on_click=handle_sign_in)
 
 # Step 2: OTP input
 elif st.session_state.step == 2:
@@ -413,7 +415,12 @@ elif st.session_state.step == 2:
     if otp_submitted:
         with st.spinner("Verifying OTP..."):
             challenge = st.session_state.sign_in_result["otpSessionChallenge"]
-            sign_in_result = sign_in_with_otp(challenge, otp, AUD, make_client(local_schema=load_local_schema("schema.graphql")))
+            sign_in_result = sign_in_with_otp(
+                challenge,
+                otp,
+                AUD,
+                make_client(local_schema=load_local_schema("schema.graphql"))
+            )
             st.session_state.sign_in_result = sign_in_result
 
         if sign_in_result.get("errors"):
