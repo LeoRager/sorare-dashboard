@@ -4,6 +4,8 @@ gql
 graphql-core
 pandas
 numpy
+lxml==5.3.0
 soccerdata
 thefuzz
 streamlit
+setuptools
