@@ -247,20 +247,34 @@ def get_fbref_stats(df: pd.DataFrame, season="2025-26"):
 
     df.rename(columns={"team_x": "team"}, inplace=True)
 
-    team_stats = fbref.read_team_season_stats(stat_type="standard", opponent_stats=True)
-    team_stats_subset = team_stats.loc[:, [('Per 90 Minutes', 'npxG'), ('Playing Time', '90s')]].reset_index()
-    team_stats_subset.columns = ['league', 'season', 'team', 'npxG_against_p90', 'team_90s']
-    team_stats_subset['team'] = team_stats_subset['team'].str[3:]
+    vs_team_stats = fbref.read_team_season_stats(stat_type="standard", opponent_stats=True)
+    vs_team_stats_subset = vs_team_stats.loc[:, [('Per 90 Minutes', 'npxG')]].reset_index()
+    vs_team_stats_subset.columns = ['league', 'season', 'team', 'npxG_against_p90']
+    vs_team_stats_subset['team'] = vs_team_stats_subset['team'].str[3:]
 
     df["fbref_next_game_team"] = df["next_game"].map(team_map)
-    team_stats_subset = calculate_avg_xG_conceded(team_stats_subset)
+    vs_team_stats_subset = calculate_avg_xG_conceded(vs_team_stats_subset)
+
+    # Get team_90s
+    team_stats = fbref.read_team_season_stats(stat_type="standard")
+    team_stats_subset = team_stats.loc[:, [('Playing Time', '90s')]].reset_index()
+    team_stats_subset.columns = ['league', 'season', 'team', 'team_90s']
 
     df = df.merge(
-        team_stats_subset,
+        vs_team_stats_subset,
         left_on="fbref_next_game_team",
         right_on="team",
         how="left"
     ).drop(columns=["team_y", "league_y", "season_y", "league_x", "season_x"])
+
+    df = df.merge(
+        team_stats_subset,
+        left_on="fbref_team",
+        right_on="team",
+        how="left"
+    ).drop(columns=["team", "league", "season"])
+
+    df.rename(columns={"team_x": "team"}, inplace=True)
 
     return df
 

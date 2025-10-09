@@ -278,28 +278,35 @@ def get_fbref_stats(df: pd.DataFrame, season="2025-26"):
     # Rename team_x to team
     df.rename(columns={"team_x": "team"}, inplace=True)
 
-    # --- TEAM OPPONENT STATS (DEFENSIVE) ---
-    team_stats = fbref.read_team_season_stats(stat_type="standard", opponent_stats=True)
+    ## Get Opponent Stats
+    vs_team_stats = fbref.read_team_season_stats(stat_type="standard", opponent_stats=True)
+    vs_team_stats_subset = vs_team_stats.loc[:, [('Per 90 Minutes', 'npxG')]].reset_index()
+    vs_team_stats_subset.columns = ['league', 'season', 'team', 'npxG_against_p90']
+    vs_team_stats_subset['team'] = vs_team_stats_subset['team'].str[3:]
 
-    # We want per 90 npxG against
-    team_stats_subset = team_stats.loc[:, [('Per 90 Minutes', 'npxG'), ('Playing Time', '90s')]].reset_index()
-    team_stats_subset.columns = ['league', 'season', 'team', 'npxG_against_p90', 'team_90s']
-
-    # Drop the first 3 characters from each team name
-    team_stats_subset['team'] = team_stats_subset['team'].str[3:]
-
-    # Map Sorare next_game to FBref teams
     df["fbref_next_game_team"] = df["next_game"].map(team_map)
+    vs_team_stats_subset = calculate_avg_xG_conceded(vs_team_stats_subset)
 
-    team_stats_subset = calculate_avg_xG_conceded(team_stats_subset)
+    ## Get team_90s
+    team_stats = fbref.read_team_season_stats(stat_type="standard")
+    team_stats_subset = team_stats.loc[:, [('Playing Time', '90s')]].reset_index()
+    team_stats_subset.columns = ['league', 'season', 'team', 'team_90s']
 
-    # Merge opponent stats into df
     df = df.merge(
-        team_stats_subset,
+        vs_team_stats_subset,
         left_on="fbref_next_game_team",
         right_on="team",
         how="left"
     ).drop(columns=["team_y", "league_y", "season_y", "league_x", "season_x"])
+
+    df = df.merge(
+        team_stats_subset,
+        left_on="fbref_team",
+        right_on="team",
+        how="left"
+    ).drop(columns=["team", "league", "season"])
+
+    df.rename(columns={"team_x": "team"}, inplace=True)
 
     return df
 
@@ -338,9 +345,11 @@ def analyse_players(df):
     # Combine all conditions
     filtered = df[mask_games & mask_odds & mask_playing_time].copy()
 
-    # Adjusted xG for player
-    filtered["adjusted_xG"] = (
-        filtered["npxG+xAG_p90"] * (filtered["npxG_against_p90"] / filtered["avg_xG_conceded_league"])
+    # Adjusted xG for player, if avg is not NaN, otherwise keep as is
+    filtered["adjusted_xG"] = np.where(
+        filtered["avg_xG_conceded_league"].notna() & (filtered["avg_xG_conceded_league"] != 0),
+        filtered["npxG+xAG_p90"] * (filtered["npxG_against_p90"] / filtered["avg_xG_conceded_league"]),
+        filtered["npxG+xAG_p90"]
     )
 
     # Poisson probability of scoring at least once
