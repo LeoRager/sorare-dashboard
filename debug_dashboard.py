@@ -279,33 +279,57 @@ def get_fbref_stats(df: pd.DataFrame, season="2025-26"):
     return df
 
 
-def analyse_players(df):
+def analyse_players(
+    df,
+    min_nineties_ratio: float = 0.65,
+    min_starts: int = 8,
+    min_starter_odds: int = 6000
+):
     df["next_game_date"] = pd.to_datetime(df["next_game_date"], utc=True)
     now = pd.Timestamp.now(tz="UTC")
     today = now.normalize()
     tomorrow_cutoff = today + pd.Timedelta(days=1) + pd.Timedelta(hours=7)
 
+    # Select games played today or before tomorrow morning (7am)
     mask_games = (df["next_game_date"].dt.normalize() == today) | (
         (df["next_game_date"] > today) & (df["next_game_date"] <= tomorrow_cutoff)
     )
 
-    mask_odds = (df["odds_reliability"].isna()) | (df["starter_odds_bp"] >= 6000)
-    mask_playing_time = (df["90s"] >= 0.65 * df["team_90s"]) | (df["Starts"] >= 8)
+    # Starter odds filter
+    mask_odds = (df["odds_reliability"].isna()) | (df["starter_odds_bp"] >= min_starter_odds)
+
+    # Playing time filter
+    mask_playing_time = (df["90s"] >= min_nineties_ratio * df["team_90s"]) | (df["Starts"] >= min_starts)
+
+    # Apply combined filters
     filtered = df[mask_games & mask_odds & mask_playing_time].copy()
 
+    # Adjust xG using opponent defensive strength
     filtered["adjusted_xG"] = np.where(
         filtered["avg_xG_conceded_league"].notna() & (filtered["avg_xG_conceded_league"] != 0),
         filtered["npxG+xAG_p90"] * (filtered["npxG_against_p90"] / filtered["avg_xG_conceded_league"]),
         filtered["npxG+xAG_p90"]
     )
 
+    # Poisson probability of scoring at least once
     filtered["prob_scoring"] = 1 - np.exp(-filtered["adjusted_xG"])
-    filtered = filtered.drop(columns=["fbref_team", 'rarity', 'next_game_date', 'fbref_name', 'fbref_next_game_team'])
+
+    # Drop unnecessary columns
+    drop_cols = ["fbref_team", "rarity", "next_game_date", "fbref_name", "fbref_next_game_team"]
+    filtered = filtered.drop(columns=[c for c in drop_cols if c in filtered.columns])
+
+    # Sort by scoring probability
     filtered = filtered.sort_values(by="prob_scoring", ascending=False)
 
-    new_names = ['First Name', 'Last Name', 'Team', 'Starting Likelihood (%)', 'Odds Reliability', 'Next Opponent']
+    # Rename visible columns
+    new_names = [
+        "First Name", "Last Name", "Team",
+        "Starting Likelihood (%)", "Odds Reliability", "Next Opponent"
+    ]
     filtered.columns = new_names + list(filtered.columns[len(new_names):])
+
     return filtered
+
 
 
 def main():
