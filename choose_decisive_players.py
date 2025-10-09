@@ -322,30 +322,32 @@ def calculate_avg_xG_conceded(df):
     return df
 
 
-def analyse_players(df):
-    # Ensure datetime format
+def analyse_players(
+    df,
+    min_nineties_ratio: float = 65,
+    min_starts: int = 8,
+    min_starter_odds: int = 60
+):
     df["next_game_date"] = pd.to_datetime(df["next_game_date"], utc=True)
-
-    # Get today's and tomorrow's cut-off
     now = pd.Timestamp.now(tz="UTC")
     today = now.normalize()
     tomorrow_cutoff = today + pd.Timedelta(days=1) + pd.Timedelta(hours=7)
 
-    # Filter for games today or tomorrow before 7am
+    # Select games played today or before tomorrow morning (7am)
     mask_games = (df["next_game_date"].dt.normalize() == today) | (
         (df["next_game_date"] > today) & (df["next_game_date"] <= tomorrow_cutoff)
     )
 
-    # Filter by odds conditions
-    mask_odds = (df["odds_reliability"].isna()) | (df["starter_odds_bp"] >= 6000)
+    # Starter odds filter
+    mask_odds = (df["odds_reliability"].isna()) | (df["starter_odds_bp"] >= min_starter_odds*100)
 
-    # Filter by playing time
-    mask_playing_time = (df["90s"] >= 0.65 * df["team_90s"]) | (df["Starts"] >= 8)
+    # Playing time filter
+    mask_playing_time = (df["90s"] >= min_nineties_ratio/100 * df["team_90s"]) | (df["Starts"] >= min_starts)
 
-    # Combine all conditions
+    # Apply combined filters
     filtered = df[mask_games & mask_odds & mask_playing_time].copy()
 
-    # Adjusted xG for player, if avg is not NaN, otherwise keep as is
+    # Adjust xG using opponent defensive strength
     filtered["adjusted_xG"] = np.where(
         filtered["avg_xG_conceded_league"].notna() & (filtered["avg_xG_conceded_league"] != 0),
         filtered["npxG+xAG_p90"] * (filtered["npxG_against_p90"] / filtered["avg_xG_conceded_league"]),
@@ -355,16 +357,18 @@ def analyse_players(df):
     # Poisson probability of scoring at least once
     filtered["prob_scoring"] = 1 - np.exp(-filtered["adjusted_xG"])
 
-    # Drop columns
-    filtered = filtered.drop(columns=["fbref_team", 'rarity', 'next_game_date', 'fbref_name', 'fbref_next_game_team'])
+    # Drop unnecessary columns
+    drop_cols = ["fbref_team", "rarity", "next_game_date", "fbref_name", "fbref_next_game_team"]
+    filtered = filtered.drop(columns=[c for c in drop_cols if c in filtered.columns])
 
-    # Sort by highest to lowest prob_scoring
+    # Sort by scoring probability
     filtered = filtered.sort_values(by="prob_scoring", ascending=False)
 
-    # List of new names for the first few columns
-    new_names = ['First Name', 'Last Name', 'Team', 'Starting Likelihood (%)', 'Odds Reliability', 'Next Opponent']
-
-    # Replace the first few columns while keeping the rest
+    # Rename visible columns
+    new_names = [
+        "First Name", "Last Name", "Team",
+        "Starting Likelihood (%)", "Odds Reliability", "Next Opponent"
+    ]
     filtered.columns = new_names + list(filtered.columns[len(new_names):])
 
     return filtered
@@ -440,15 +444,39 @@ elif st.session_state.step == 2:
 
 # Step 3: Fetch and display data
 if st.session_state.step == 3 and st.session_state.token:
-    with st.spinner("Fetching your cards and analysing data..."):
-        token = st.session_state.token
-        local_schema = load_local_schema("schema.graphql")
-        cards = fetch_owned_cards(token, AUD, local_schema, page_size=50)
+    st.success("Signed in successfully.")
 
-        df = pd.DataFrame(cards)
-        df = clean_data(df)
-        df = get_fbref_stats(df)
-        filtered_df = analyse_players(df)
+    st.subheader("Adjust Player Filters")
 
-    st.success("Data loaded successfully!")
-    st.dataframe(filtered_df)
+    # Interactive sliders / inputs for analyse_players parameters
+    min_nineties_ratio = st.slider(
+        "Available Minutes Played (%)",
+        0.0, 100.0, 65.0, 1.0
+    )
+    min_starts = st.number_input(
+        "Minimum number of starts required",
+        min_value=0, max_value=50, value=8, step=1
+    )
+    min_starter_odds = st.slider(
+        "Likelihood of Starting (%)",
+        min_value=0, max_value=100, value=60, step=5
+    )
+
+    if st.button("Fetch and Analyse My Cards"):
+        with st.spinner("Fetching your cards and analysing data..."):
+            token = st.session_state.token
+            local_schema = load_local_schema("schema.graphql")
+            cards = fetch_owned_cards(token, AUD, local_schema, page_size=50)
+
+            df = pd.DataFrame(cards)
+            df = clean_data(df)
+            df = get_fbref_stats(df)
+            filtered_df = analyse_players(
+                df,
+                min_nineties_ratio=min_nineties_ratio,
+                min_starts=min_starts,
+                min_starter_odds=min_starter_odds
+            )
+
+        st.success("Data loaded successfully!")
+        st.dataframe(filtered_df)
