@@ -326,8 +326,10 @@ def analyse_players(
     df,
     min_nineties_ratio: float = 65,
     min_starts: int = 8,
-    min_starter_odds: int = 60
+    min_starter_odds: int = 60,
+    rarities: list = ["common", "limited", "rare", "superRare", "unique"]
 ):
+    df = df[df["rarity"].isin(rarities)]
     df["next_game_date"] = pd.to_datetime(df["next_game_date"], utc=True)
     now = pd.Timestamp.now(tz="UTC")
     today = now.normalize()
@@ -462,6 +464,20 @@ if st.session_state.step == 3 and st.session_state.token:
         min_value=0, max_value=100, value=60, step=5
     )
 
+    # Dropdown menu for rarities
+    rarity_options = ["Common", "Limited", "Rare", "Super Rare", "Unique"]
+    selected_rarities = st.multiselect(
+        "Select Card Rarities",
+        options=rarity_options,
+        default=rarity_options  # Select all by default
+    )
+
+    # Convert selections to lowercase and adjust 'Super Rare' to 'superRare'
+    rarities = [
+        "superRare" if r == "Super Rare" else r.lower()
+        for r in selected_rarities
+    ]
+
     if st.button("Fetch and Analyse My Cards"):
         with st.spinner("Fetching your cards and analysing data..."):
             token = st.session_state.token
@@ -475,7 +491,8 @@ if st.session_state.step == 3 and st.session_state.token:
                 df,
                 min_nineties_ratio=min_nineties_ratio,
                 min_starts=min_starts,
-                min_starter_odds=min_starter_odds
+                min_starter_odds=min_starter_odds,
+                rarities=rarities
             )
 
         st.success("Data loaded successfully!")

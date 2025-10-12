@@ -283,8 +283,10 @@ def analyse_players(
     df,
     min_nineties_ratio: float = 0.65,
     min_starts: int = 8,
-    min_starter_odds: int = 6000
+    min_starter_odds: int = 6000,
+    rarities: list = ["common", "limited", "rare", "superRare", "unique"]
 ):
+    df = df[df["rarity"].isin(rarities)]
     df["next_game_date"] = pd.to_datetime(df["next_game_date"], utc=True)
     now = pd.Timestamp.now(tz="UTC")
     today = now.normalize()
@@ -363,7 +365,7 @@ def main():
     df = pd.DataFrame(cards)
     df = clean_data(df)
     df = get_fbref_stats(df)
-    filtered_df = analyse_players(df)
+    filtered_df = analyse_players(df, rarities=["common"])
 
     print("\n=== Top Players Analysis ===")
     print(filtered_df.to_string(index=False))
