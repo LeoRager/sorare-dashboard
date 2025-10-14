@@ -191,6 +191,7 @@ def get_fbref_stats(df: pd.DataFrame, season="2025-26"):
             "Stade Rennais F.C.": "Rennes",
             "Real Valladolid CF": "Valladolid",
             "Paris Saint-Germain": "Paris S-G",
+            "Romania": np.nan
         }
 
         team_map = {}
@@ -283,7 +284,7 @@ def analyse_players(
     df,
     min_nineties_ratio: float = 0.65,
     min_starts: int = 8,
-    min_starter_odds: int = 6000,
+    min_starter_odds: int = 60,
     rarities: list = ["common", "limited", "rare", "superRare", "unique"]
 ):
     df = df[df["rarity"].isin(rarities)]
@@ -298,7 +299,7 @@ def analyse_players(
     )
 
     # Starter odds filter
-    mask_odds = (df["odds_reliability"].isna()) | (df["starter_odds_bp"] >= min_starter_odds)
+    mask_odds = (df["odds_reliability"].isna()) | (df["starter_odds_bp"] >= min_starter_odds*100)
 
     # Playing time filter
     mask_playing_time = (df["90s"] >= min_nineties_ratio * df["team_90s"]) | (df["Starts"] >= min_starts)
@@ -317,7 +318,8 @@ def analyse_players(
     filtered["prob_scoring"] = 1 - np.exp(-filtered["adjusted_xG"])
 
     # Drop unnecessary columns
-    drop_cols = ["fbref_team", "rarity", "next_game_date", "fbref_name", "fbref_next_game_team"]
+    drop_cols = ["fbref_team", "rarity", "next_game_date", "fbref_name", "fbref_next_game_team",
+                 "avg_xG_conceded_league", "team_90s", "adjusted_xG", "odds_reliability"]
     filtered = filtered.drop(columns=[c for c in drop_cols if c in filtered.columns])
 
     # Sort by scoring probability
@@ -325,13 +327,29 @@ def analyse_players(
 
     # Rename visible columns
     new_names = [
-        "First Name", "Last Name", "Team",
-        "Starting Likelihood (%)", "Odds Reliability", "Next Opponent"
+        "First Name", "Last Name", "Team", "Starting Likelihood (%)", "Next Opponent",
+        "npxG+xAG p90", "npxG+xAG", "90s", "Starts", "npxG p90 Conceded", "Scoring Probability (%)"
     ]
-    filtered.columns = new_names + list(filtered.columns[len(new_names):])
+    filtered.columns = new_names
+
+    # Combine First and Last name column to "Name"
+    filtered["Name"] = filtered["First Name"] + " " + filtered["Last Name"]
+
+    # Drop First and Last name columns
+    filtered = filtered.drop(columns=["First Name", "Last Name"])
+
+    # Divide Starting Likelihood by 100
+    filtered["Starting Likelihood (%)"] = filtered["Starting Likelihood (%)"] / 100
+
+    # Reorder the columns: "Name", "Team", "Next Opponent", "Starting Likelihood", "Scoring Probability", "90s", "Starts"
+    # "npxG+xAG p90", "npxG+xAG", "npxG p90 Conceded"
+    filtered = filtered[
+        ["Name", "Team", "Next Opponent", "Starting Likelihood (%)", "Scoring Probability (%)", "90s", "Starts",
+         "npxG+xAG p90", "npxG+xAG", "npxG p90 Conceded"]
+    ]
+
 
     return filtered
-
 
 
 def main():
@@ -365,7 +383,7 @@ def main():
     df = pd.DataFrame(cards)
     df = clean_data(df)
     df = get_fbref_stats(df)
-    filtered_df = analyse_players(df, rarities=["common"])
+    filtered_df = analyse_players(df)
 
     print("\n=== Top Players Analysis ===")
     print(filtered_df.to_string(index=False))
