@@ -1,5 +1,6 @@
 import streamlit as st
 from debug_dashboard import *
+from login import *
 
 AUD = "choose_decisive_player"
 
@@ -108,15 +109,14 @@ if st.session_state.step == 3 and st.session_state.token:
     if st.button("Fetch and Analyse My Cards"):
         with st.spinner("Fetching your cards and analysing data..."):
             token = st.session_state.token
-            local_schema = load_local_schema("schema.graphql")
-            cards = fetch_owned_cards(token, AUD, local_schema, page_size=50)
+            cards = fetch_owned_cards(token, AUD, page_size=50)
 
             df = pd.DataFrame(cards)
             df = clean_data(df)
             df = get_fbref_stats(df)
             filtered_df = analyse_players(
                 df,
-                min_nineties_ratio=min_nineties_ratio,
+                min_nineties_ratio=min_nineties_ratio/100,
                 min_starts=min_starts,
                 min_starter_odds=min_starter_odds,
                 rarities=rarities

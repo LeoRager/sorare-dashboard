@@ -1,164 +1,10 @@
-import bcrypt
-import requests
-from gql import gql, Client
-from gql.transport.requests import RequestsHTTPTransport
-from graphql import build_schema
-from typing import List, Optional
 import pandas as pd
 import numpy as np
 import soccerdata as sd
 from thefuzz import process
-
-AUD = "choose_decisive_player"
-GRAPHQL_ENDPOINT = "https://api.sorare.com/graphql"
-
-
-def load_local_schema(path: str = "schema.graphql"):
-    with open(path, "r", encoding="utf-8") as fh:
-        sdl = fh.read()
-    return build_schema(sdl)
-
-
-def get_salt_for_email(email: str) -> str:
-    url = f"https://api.sorare.com/api/v1/users/{email}"
-    resp = requests.get(url)
-    resp.raise_for_status()
-    data = resp.json()
-    return data.get("salt")
-
-
-def hash_password(password: str, salt: str) -> str:
-    salt_bytes = salt.encode("utf-8")
-    hashed = bcrypt.hashpw(password.encode("utf-8"), salt_bytes)
-    return hashed.decode("utf-8")
-
-
-def make_client(jwt_token: Optional[str] = None, aud: Optional[str] = None, local_schema=None):
-    headers = {"Content-type": "application/json"}
-    if jwt_token:
-        headers["Authorization"] = f"Bearer {jwt_token}"
-    if aud:
-        headers["JWT-AUD"] = aud
-
-    transport = RequestsHTTPTransport(
-        url=GRAPHQL_ENDPOINT,
-        use_json=True,
-        headers=headers,
-        verify=True,
-    )
-
-    if local_schema is not None:
-        return Client(transport=transport, schema=local_schema, fetch_schema_from_transport=False)
-    return Client(transport=transport, fetch_schema_from_transport=False)
-
-
-def sign_in_with_password(email: str, hashed_password: str, aud: str, client: Client):
-    mutation = gql(
-        '''
-        mutation SignIn($input: signInInput!) {
-          signIn(input: $input) {
-            currentUser { slug }
-            jwtToken(aud: "%s") { token expiredAt }
-            otpSessionChallenge
-            errors { message }
-          }
-        }
-        ''' % aud
-    )
-    variables = {"input": {"email": email, "password": hashed_password}}
-    return client.execute(mutation, variable_values=variables)["signIn"]
-
-
-def sign_in_with_otp(challenge: str, otp: str, aud: str, client: Client):
-    mutation = gql(
-        '''
-        mutation SignInWithOtp($input: signInInput!) {
-          signIn(input: $input) {
-            currentUser { slug }
-            jwtToken(aud: "%s") { token expiredAt }
-            errors { message }
-          }
-        }
-        ''' % aud
-    )
-    variables = {"input": {"otpSessionChallenge": challenge, "otpAttempt": otp}}
-    return client.execute(mutation, variable_values=variables)["signIn"]
-
-
-def fetch_owned_cards(jwt_token: str, aud: str, local_schema, page_size: int = 100):
-    client = make_client(jwt_token=jwt_token, aud=aud, local_schema=local_schema)
-
-    query = gql("""
-    query MyCards($first: Int!, $after: String) {
-      currentUser {
-        cards(first: $first, after: $after) {
-          nodes {
-            slug
-            ... on Card {
-              rarity
-              player {
-                firstName
-                lastName
-                activeClub {
-                  name
-                }
-                nextClassicFixturePlayingStatusOdds {
-                  starterOddsBasisPoints
-                  reliability
-                }
-                nextGame {
-                  date
-                  homeTeam { name }
-                  awayTeam { name }
-                }
-              }
-            }
-          }
-          pageInfo {
-            endCursor
-            hasNextPage
-          }
-        }
-      }
-    }
-    """)
-
-    cards = []
-    after = None
-
-    while True:
-        variables = {"first": page_size, "after": after}
-        result = client.execute(query, variable_values=variables)
-
-        cards_conn = result.get("currentUser", {}).get("cards", {})
-        nodes = cards_conn.get("nodes", [])
-
-        for node in nodes:
-            player = node.get("player") or {}
-            club = player.get("activeClub") or {}
-            odds = player.get("nextClassicFixturePlayingStatusOdds") or {}
-            next_game = player.get("nextGame") or {}
-            home_team = (next_game.get("homeTeam") or {}).get("name")
-            away_team = (next_game.get("awayTeam") or {}).get("name")
-
-            cards.append({
-                "first_name": player.get("firstName"),
-                "last_name": player.get("lastName"),
-                "team": club.get("name"),
-                "rarity": node.get("rarity"),
-                "starter_odds_bp": odds.get("starterOddsBasisPoints"),
-                "odds_reliability": odds.get("reliability"),
-                "next_game_date": next_game.get("date"),
-                "next_game_home": home_team,
-                "next_game_away": away_team,
-            })
-
-        page_info = cards_conn.get("pageInfo") or {}
-        if not page_info.get("hasNextPage"):
-            break
-        after = page_info.get("endCursor")
-
-    return cards
+from login import *
+from sorare_backend import fetch_owned_cards, load_local_schema
+from price_history import get_price_history
 
 
 def clean_data(df):
@@ -377,17 +223,19 @@ def main():
         return
 
     token = sign_in_result["jwtToken"]["token"]
-    print("Fetching your cards and analysing data...")
+    # print("Fetching your cards and analysing data...")
+    #
+    # cards = fetch_owned_cards(token, AUD, page_size=50)
+    # df = pd.DataFrame(cards)
+    # df = clean_data(df)
+    # df = get_fbref_stats(df)
+    # filtered_df = analyse_players(df)
+    #
+    # print("\n=== Top Players Analysis ===")
+    # print(filtered_df.to_string(index=False))
 
-    cards = fetch_owned_cards(token, AUD, local_schema, page_size=50)
-    df = pd.DataFrame(cards)
-    df = clean_data(df)
-    df = get_fbref_stats(df)
-    filtered_df = analyse_players(df)
-
-    print("\n=== Top Players Analysis ===")
-    print(filtered_df.to_string(index=False))
-
+    cards = get_price_history(token, AUD, page_size=50)
+    print(cards.head)
 
 if __name__ == "__main__":
     main()
