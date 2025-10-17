@@ -131,17 +131,17 @@ def analyse_players(
     min_nineties_ratio: float = 0.65,
     min_starts: int = 8,
     min_starter_odds: int = 60,
-    rarities: list = ["common", "limited", "rare", "superRare", "unique"]
+    rarities: list = ["common", "limited", "rare", "superRare", "unique"],
+    date_threshold: pd.Timestamp = pd.Timestamp.now(tz="UTC")
 ):
     df = df[df["rarity"].isin(rarities)]
     df["next_game_date"] = pd.to_datetime(df["next_game_date"], utc=True)
-    now = pd.Timestamp.now(tz="UTC")
-    today = now.normalize()
-    tomorrow_cutoff = today + pd.Timedelta(days=1) + pd.Timedelta(hours=7)
+    date_threshold = date_threshold.normalize()
+    tomorrow_cutoff = date_threshold + pd.Timedelta(days=1) + pd.Timedelta(hours=7)
 
-    # Select games played today or before tomorrow morning (7am)
-    mask_games = (df["next_game_date"].dt.normalize() == today) | (
-        (df["next_game_date"] > today) & (df["next_game_date"] <= tomorrow_cutoff)
+    # Select games played date_threshold or before tomorrow morning (7am)
+    mask_games = (df["next_game_date"].dt.normalize() == date_threshold) | (
+            (df["next_game_date"] > date_threshold) & (df["next_game_date"] <= tomorrow_cutoff)
     )
 
     # Starter odds filter

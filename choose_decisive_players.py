@@ -106,6 +106,15 @@ if st.session_state.step == 3 and st.session_state.token:
         for r in selected_rarities
     ]
 
+    # Add a date selector for date_threshold
+    selected_date = st.date_input(
+        "Select Game Date",
+        value=pd.Timestamp.now().date(),
+        min_value=pd.Timestamp.now().date(),
+        max_value=(pd.Timestamp.now() + pd.Timedelta(days=5)).date()
+    )
+    date_threshold = pd.Timestamp(selected_date).tz_localize("UTC").normalize()
+
     if st.button("Fetch and Analyse My Cards"):
         with st.spinner("Fetching your cards and analysing data..."):
             token = st.session_state.token
@@ -119,7 +128,8 @@ if st.session_state.step == 3 and st.session_state.token:
                 min_nineties_ratio=min_nineties_ratio/100,
                 min_starts=min_starts,
                 min_starter_odds=min_starter_odds,
-                rarities=rarities
+                rarities=rarities,
+                date_threshold=date_threshold
             )
 
         st.success("Data loaded successfully!")
