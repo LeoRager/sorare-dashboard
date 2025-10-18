@@ -4,10 +4,14 @@ import soccerdata as sd
 from thefuzz import process
 from login import *
 from sorare_backend import fetch_owned_cards, load_local_schema
-from price_history import get_price_history
+from price_history import get_price_history, run_lambda_analysis
 
 
 def clean_data(df):
+    # Only keep the following column: first_name, last_name, team, rarity, starter_odds_bp, odds_reliability,
+    # next_game_date, next_game_home, next_game_away
+    df = df[["first_name", "last_name", "team", "rarity", "starter_odds_bp", "odds_reliability", "next_game_date",
+             "next_game_home", "next_game_away"]]
     df = df.dropna(subset=[col for col in df.columns if col not in ["starter_odds_bp", "odds_reliability"]])
     df = df.drop_duplicates()
     df["next_game"] = np.where(
@@ -234,8 +238,9 @@ def main():
     # print("\n=== Top Players Analysis ===")
     # print(filtered_df.to_string(index=False))
 
-    cards = get_price_history(token, AUD, page_size=50)
-    print(cards.head)
+    # cards = run_lambda_analysis(token, AUD, total_limit=300)
+    # print(cards.head)
+    # return cards
 
 if __name__ == "__main__":
     main()
