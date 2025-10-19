@@ -1,6 +1,8 @@
 import streamlit as st
+
 from debug_dashboard import *
 from login import *
+from price_history import get_price_history
 
 AUD = "choose_decisive_player"
 
@@ -72,65 +74,140 @@ elif st.session_state.step == 2:
             st.session_state.token = sign_in_result["jwtToken"]["token"]
             st.session_state.step = 3
 
-# Step 3: Fetch and display data
+# Step 3: Tools
 if st.session_state.step == 3 and st.session_state.token:
     st.success("Signed in successfully.")
 
-    st.subheader("Adjust Player Filters")
+    tab_decisive, tab_value = st.tabs(["Choose decisive players", "Estimate club value"])
 
-    # Interactive sliders / inputs for analyse_players parameters
-    min_nineties_ratio = st.slider(
-        "Available Minutes Played (%)",
-        0.0, 100.0, 65.0, 1.0
-    )
-    min_starts = st.number_input(
-        "Minimum number of starts required",
-        min_value=0, max_value=50, value=8, step=1
-    )
-    min_starter_odds = st.slider(
-        "Likelihood of Starting (%)",
-        min_value=0, max_value=100, value=60, step=5
-    )
+    with tab_decisive:
+        st.subheader("Adjust player filters")
 
-    # Dropdown menu for rarities
-    rarity_options = ["Common", "Limited", "Rare", "Super Rare", "Unique"]
-    selected_rarities = st.multiselect(
-        "Select Card Rarities",
-        options=rarity_options,
-        default=rarity_options  # Select all by default
-    )
+        min_nineties_ratio = st.slider(
+            "Available Minutes Played percent",
+            0.0, 100.0, 65.0, 1.0
+        )
+        min_starts = st.number_input(
+            "Minimum number of starts required",
+            min_value=0, max_value=50, value=8, step=1
+        )
+        min_starter_odds = st.slider(
+            "Likelihood of starting percent",
+            min_value=0, max_value=100, value=60, step=5
+        )
 
-    # Convert selections to lowercase and adjust 'Super Rare' to 'superRare'
-    rarities = [
-        "superRare" if r == "Super Rare" else r.lower()
-        for r in selected_rarities
-    ]
+        rarity_options = ["Common", "Limited", "Rare", "Super Rare", "Unique"]
+        selected_rarities = st.multiselect(
+            "Select card rarities",
+            options=rarity_options,
+            default=rarity_options
+        )
 
-    # Add a date selector for date_threshold
-    selected_date = st.date_input(
-        "Select Game Date",
-        value=pd.Timestamp.now().date(),
-        min_value=pd.Timestamp.now().date(),
-        max_value=(pd.Timestamp.now() + pd.Timedelta(days=5)).date()
-    )
-    date_threshold = pd.Timestamp(selected_date).tz_localize("UTC").normalize()
+        rarities = [
+            "superRare" if r == "Super Rare" else r.lower()
+            for r in selected_rarities
+        ]
 
-    if st.button("Fetch and Analyse My Cards"):
-        with st.spinner("Fetching your cards and analysing data..."):
-            token = st.session_state.token
-            cards = fetch_owned_cards(token, AUD, page_size=50)
+        selected_date = st.date_input(
+            "Select game date",
+            value=pd.Timestamp.now().date(),
+            min_value=pd.Timestamp.now().date(),
+            max_value=(pd.Timestamp.now() + pd.Timedelta(days=5)).date()
+        )
+        date_threshold = pd.Timestamp(selected_date).tz_localize("UTC").normalize()
 
-            df = pd.DataFrame(cards)
-            df = clean_data(df)
-            df = get_fbref_stats(df)
-            filtered_df = analyse_players(
-                df,
-                min_nineties_ratio=min_nineties_ratio/100,
-                min_starts=min_starts,
-                min_starter_odds=min_starter_odds,
-                rarities=rarities,
-                date_threshold=date_threshold
+        if st.button("Fetch and analyse my cards"):
+            with st.spinner("Fetching your cards and analysing data..."):
+                token = st.session_state.token
+                cards = fetch_owned_cards(token, AUD, page_size=50)
+
+                df = pd.DataFrame(cards)
+                df = clean_data(df)
+                df = get_fbref_stats(df)
+                filtered_df = analyse_players(
+                    df,
+                    min_nineties_ratio=min_nineties_ratio / 100,
+                    min_starts=min_starts,
+                    min_starter_odds=min_starter_odds,
+                    rarities=rarities,
+                    date_threshold=date_threshold
+                )
+
+            st.success("Data loaded successfully.")
+            st.dataframe(filtered_df, width="stretch")
+
+    with tab_value:
+        st.subheader("Club value estimator")
+
+        # The only input for get_price_history
+        total_limit = st.slider(
+            "Total cards fetched per player",
+            min_value=50,
+            max_value=1000,
+            value=300,
+            step=50
+        )
+
+        def colour_pl(val):
+            try:
+                x = float(val)
+            except Exception:
+                return ""
+            if x > 0:
+                return "color: green;"
+            if x < 0:
+                return "color: red;"
+            return "color: grey;"
+
+
+        if st.button("Estimate my club value"):
+            with st.spinner("Fetching price history and estimating value..."):
+                token = st.session_state.token
+
+                # This returns a DataFrame with columns:
+                # Player, Team, Rarity, Purchase Price (EUR), Current Value (EUR), P/L (EUR)
+                df_prices = get_price_history(
+                    jwt_token=token,
+                    aud=AUD,
+                    page_size=50,
+                    total_limit=total_limit,
+                )
+
+                # Ensure numeric for formatting and styling
+                for col in ["Purchase Price (EUR)", "Current Value (EUR)", "P/L (EUR)"]:
+                    if col in df_prices.columns:
+                        df_prices[col] = pd.to_numeric(df_prices[col], errors="coerce")
+
+                total_spent = float(np.nansum(df_prices.get("Purchase Price (EUR)", pd.Series(dtype=float)).values))
+                total_value = float(np.nansum(df_prices.get("Current Value (EUR)", pd.Series(dtype=float)).values))
+                total_pl = float(np.nansum(df_prices.get("P/L (EUR)", pd.Series(dtype=float)).values))
+
+            # Create three columns for metrics
+            col1, col2, col3 = st.columns(3)
+
+            col1.metric(
+                label="Total Spent",
+                value=f"€{total_spent:,.2f}"
+            )
+            col2.metric(
+                label="Estimated Club Value",
+                value=f"€{total_value:,.2f}"
+            )
+            col3.metric(
+                label="Total P/L",
+                value=f"€{total_pl:+,.2f}",
+                delta=None
             )
 
-        st.success("Data loaded successfully!")
-        st.dataframe(filtered_df)
+            styled = (
+                df_prices.style
+                .format({
+                    "Purchase Price (EUR)": "€{:,.2f}",
+                    "Current Value (EUR)": "€{:,.2f}",
+                    "P/L (EUR)": "€{:+,.2f}",
+                })
+                .map(colour_pl, subset=["P/L (EUR)"])
+            )
+
+            st.dataframe(styled, width='stretch')
+
