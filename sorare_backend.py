@@ -2,6 +2,8 @@ from gql import gql
 from graphql import build_schema
 from login import make_client
 import pandas as pd
+from db_backend import get_engine, ensure_schema, max_date_for_player, upsert_sales, load_sales_for_owned
+import streamlit as st
 
 def load_local_schema(path: str = "schema.graphql"):
     with open(path, "r", encoding="utf-8") as fh:
@@ -108,27 +110,26 @@ def fetch_owned_cards(jwt_token: str, aud: str, page_size: int = 50):
     return cards
 
 
-def fetch_recent_sales(jwt_token: str, aud: str, df: pd.DataFrame, batch_size: int = 50, total_limit: int = 150):
+def fetch_recent_sales(
+    jwt_token: str,
+    aud: str,
+    df_owned: pd.DataFrame,
+    batch_size: int = 50,
+    total_limit: int = 150,
+):
+    engine = get_engine(st.secrets["DATABASE_URL"])
+    ensure_schema(engine)
+
     local_schema = load_local_schema()
     client = make_client(jwt_token=jwt_token, aud=aud, local_schema=local_schema)
 
     query = gql("""
     query PlayerRecentTokenPrices(
-      $slug: String!,
-      $rarity: Rarity!,
-      $before: String,  
-      $last: Int!,
-      $seasonEligibility: SeasonEligibility!
+      $slug: String!, $rarity: Rarity!, $before: String, $last: Int!, $seasonEligibility: SeasonEligibility!
     ) {
       anyPlayer(slug: $slug) {
         slug
-        tokenPrices(
-          last: $last,
-          before: $before,
-          rarity: $rarity,
-          includePrivateSales: true,
-          seasonEligibility: $seasonEligibility
-        ) {
+        tokenPrices(last: $last, before: $before, rarity: $rarity, includePrivateSales: true, seasonEligibility: $seasonEligibility) {
           nodes {
             id
             amounts { eurCents }
@@ -140,81 +141,79 @@ def fetch_recent_sales(jwt_token: str, aud: str, df: pd.DataFrame, batch_size: i
               ... on TokenAuction { userBuyer { slug } userSeller { slug } }
             }
           }
-          pageInfo {
-            startCursor 
-            hasPreviousPage
-          }
+          pageInfo { startCursor hasPreviousPage }
         }
       }
     }
     """)
 
-    last_sales = []
+    new_rows = []
 
-    for _, row in df.iterrows():
+    for _, row in df_owned.iterrows():
         slug = row["player_slug"]
         rarity = row["rarity"].lower().replace(" ", "_")
         season_eligibility = "IN_SEASON" if row.get("in_season_eligible") else "CLASSIC"
 
+        last_dt = max_date_for_player(engine, slug)  # newest stored sale for this player
         before = None
-        fetched = 0
+        fetched_new = 0
+        stop = False
 
-        try:
-            while fetched < total_limit:
-                result = client.execute(
-                    query,
-                    variable_values={
-                        "slug": slug,
-                        "rarity": rarity,
-                        "before": before,
-                        "last": batch_size,
-                        "seasonEligibility": season_eligibility,
-                    },
-                )
+        while fetched_new < total_limit and not stop:
+            result = client.execute(query, variable_values={
+                "slug": slug, "rarity": rarity, "before": before,
+                "last": batch_size, "seasonEligibility": season_eligibility
+            })
 
-                player = result.get("anyPlayer")
-                if not player:
-                    break
+            player = result.get("anyPlayer")
+            if not player:
+                break
 
-                token_prices = player.get("tokenPrices", {})
-                nodes = token_prices.get("nodes", []) or []
+            tp = player.get("tokenPrices") or {}
+            nodes = tp.get("nodes") or []
+            if not nodes:
+                break
 
-                for node in nodes:
-                    amounts = node.get("amounts") or {}
-                    eur_cents = amounts.get("eurCents")
-                    eur = eur_cents / 100.0 if eur_cents else None
+            for n in nodes:
+                n_dt = pd.to_datetime(n.get("date"), utc=True, errors="coerce")
+                if last_dt is not None and pd.notna(n_dt) and n_dt <= last_dt:
+                    stop = True
+                    continue
 
-                    last_sales.append({
-                        "player_slug": player.get("slug"),
-                        "rarity": rarity,
-                        "card_slug": (node.get("card") or {}).get("slug"),
-                        "in_season_eligible": (node.get("card") or {}).get("inSeasonEligible"),
-                        "price_eur": eur,
-                        "buyer_slug": (
-                                (node.get("deal") or {}).get("userBuyer")
-                                or (node.get("deal") or {}).get("buyer")
-                                or {}
-                        ).get("slug"),
-                        "seller_slug": (
-                            ((node.get("deal") or {}).get("userSeller") or {}).get("slug")
-                            if (node.get("deal") or {}).get("userSeller")
-                            else None
-                        ),
-                        "date": node.get("date"),
-                    })
+                deal = n.get("deal") or {}
+                user_seller = deal.get("userSeller")
+                seller_slug = (user_seller or {}).get("slug") if user_seller else None
 
-                fetched += len(nodes)
-                if fetched >= total_limit:
-                    break
+                # skip rows with no seller, removing auctions and instant buys
+                if not seller_slug:
+                    continue
 
-                page_info = token_prices.get("pageInfo") or {}
+                eur_cents = (n.get("amounts") or {}).get("eurCents")
+                eur = eur_cents / 100.0 if eur_cents else None
 
-                if not page_info.get("hasPreviousPage"):
-                    break
+                new_rows.append({
+                    "id": n.get("id"),
+                    "player_slug": player.get("slug"),
+                    "rarity": rarity,
+                    "card_slug": (n.get("card") or {}).get("slug"),
+                    "in_season_eligible": (n.get("card") or {}).get("inSeasonEligible"),
+                    "price_eur": eur,
+                    "buyer_slug": ((deal.get("userBuyer") or deal.get("buyer") or {}) or {}).get("slug"),
+                    "seller_slug": seller_slug,
+                    "date": n.get("date"),
+                })
+                fetched_new += 1
 
-                before = page_info.get("startCursor")
+            if stop:
+                break
+            pi = tp.get("pageInfo") or {}
+            if not pi.get("hasPreviousPage"):
+                break
+            before = pi.get("startCursor")
 
-        except Exception as e:
-            print(f"Error fetching sales for {slug}: {e}")
+    # Persist new rows and then read the window you want per player
+    upsert_sales(engine, new_rows)
 
-    return last_sales
+    owned_slugs = list(df_owned["player_slug"].unique())
+    cached_df = load_sales_for_owned(engine, owned_slugs, per_player_limit=total_limit)
+    return cached_df.to_dict(orient="records")

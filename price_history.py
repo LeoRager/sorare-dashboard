@@ -2,7 +2,41 @@ import pandas as pd
 import numpy as np
 from sorare_backend import fetch_owned_cards, fetch_recent_sales
 
+
 def get_price_history(jwt_token: str, aud: str, page_size: int = 50, total_limit: int = 150):
+    cards = fetch_owned_cards(jwt_token, aud, page_size)
+    df = pd.DataFrame(cards)
+    df = df[df["rarity"].notna()]
+    df = df[df["rarity"] != "common"]
+
+    recent_sales = fetch_recent_sales(jwt_token, aud, df, batch_size=50, total_limit=total_limit)
+    recent_sales_df = pd.DataFrame(recent_sales)
+
+    if "rarity" in recent_sales_df.columns:
+        recent_sales_df = recent_sales_df.drop(columns=["rarity"])
+    if "seller_slug" in recent_sales_df.columns:
+        recent_sales_df = recent_sales_df[recent_sales_df["seller_slug"].notna()]
+
+    recent_sales_df = estimate_current_value(recent_sales_df)
+    df = df.merge(recent_sales_df, on="player_slug", how="left")
+
+    df["price_diff"] = df["estimated_value_eur"] - df["card_price"]
+    df["Name"] = df["first_name"] + " " + df["last_name"]
+
+    df = df[["Name", "rarity", "card_price", "estimated_value_eur", "price_diff"]]
+    df = df.rename(columns={
+        "Name": "Player",
+        "rarity": "Rarity",
+        "card_price": "Purchase Price (EUR)",
+        "estimated_value_eur": "Current Value (EUR)",
+        "price_diff": "P/L (EUR)"
+    })
+    df = df[[c for c in df.columns if c != "Rarity"] + ["Rarity"]]
+    return df
+
+
+
+def _get_price_history(jwt_token: str, aud: str, page_size: int = 50, total_limit: int = 150):
     cards = fetch_owned_cards(jwt_token, aud, page_size)
     df = pd.DataFrame(cards)
 
@@ -10,6 +44,7 @@ def get_price_history(jwt_token: str, aud: str, page_size: int = 50, total_limit
     df = df[df["rarity"].notna()]
     df = df[df["rarity"] != "common"]
 
+    # Fetch recent sales
     recent_sales = fetch_recent_sales(jwt_token, aud, df, total_limit=total_limit)
     recent_sales_df = pd.DataFrame(recent_sales)
 
@@ -23,10 +58,28 @@ def get_price_history(jwt_token: str, aud: str, page_size: int = 50, total_limit
 
     df = df.merge(recent_sales_df, on="player_slug", how="left")
 
+    # Calculate the price difference
+    df["price_diff"] = df["estimated_value_eur"] - df["card_price"]
+
     df["Name"] = df["first_name"] + " " + df["last_name"]
 
     # Keep only the following columns: Name, team, rarity, card_price, price_eur, date
-    df = df[["Name", "team", "rarity", "card_price", "estimated_value_eur"]]
+    df = df[["Name", "rarity", "card_price", "estimated_value_eur", "price_diff"]]
+
+    # Rename the columns for clarity
+    new_names = {
+        'Name': 'Player',
+        'rarity': 'Rarity',
+        'card_price': 'Purchase Price (EUR)',
+        'estimated_value_eur': 'Current Value (EUR)',
+        'price_diff': 'P/L (EUR)'
+    }
+
+    # Apply the renaming
+    df = df.rename(columns=new_names)
+
+    # Move rarity column to the end
+    df = df[[c for c in df.columns if c != "Rarity"] + ["Rarity"]]
 
     return df
 

@@ -5,8 +5,10 @@ graphql-core
 pandas
 numpy
 lxml==5.3.0
+psycopg2
+requests_toolbelt
 soccerdata
-thefuzz
 streamlit
 setuptools
-requests_toolbelt
+sqlalchemy
+thefuzz
