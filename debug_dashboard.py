@@ -1,3 +1,33 @@
+# put this at the very top of your app, before importing or instantiating SoccerData classes
+import cloudscraper
+from soccerdata._common import BaseRequestsReader
+
+def _init_session_with_headers(self) -> cloudscraper.CloudScraper:
+    session = cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": "linux", "mobile": False}
+    )
+    # reuse SoccerData proxy handling if you provide one
+    session.proxies.update(self.proxy())
+
+    # important headers that help on Streamlit Cloud
+    session.headers.update({
+        "user-agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+        ),
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "accept-language": "en-GB,en;q=0.9",
+        "sec-ch-ua": "\"Not A Brand\";v=\"99\", \"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\"",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\"Linux\"",
+        "referer": "https://fbref.com/",
+        "upgrade-insecure-requests": "1",
+    })
+    return session
+
+# monkey patch the base reader so all SoccerData scrapers inherit this
+BaseRequestsReader._init_session = _init_session_with_headers
+
 import pandas as pd
 import numpy as np
 import soccerdata as sd
@@ -31,7 +61,7 @@ def calculate_avg_xG_conceded(df):
 
 
 def get_fbref_stats(df: pd.DataFrame, season="2025-26"):
-    fbref = sd.FBref(leagues=["Big 5 European Leagues Combined"], seasons=[season], proxy='tor')
+    fbref = sd.FBref(leagues=["Big 5 European Leagues Combined"], seasons=[season])
     player_stats = fbref.read_player_season_stats(stat_type="standard")
     fbref_teams = player_stats.index.get_level_values("team").unique().tolist()
 
