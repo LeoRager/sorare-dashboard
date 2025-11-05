@@ -31,7 +31,7 @@ def calculate_avg_xG_conceded(df):
 
 
 def get_fbref_stats(df: pd.DataFrame, season="2025-26"):
-    fbref = sd.FBref(leagues=["Big 5 European Leagues Combined"], seasons=[season])
+    fbref = sd.FBref(leagues=["Big 5 European Leagues Combined"], seasons=[season], proxy='tor')
     player_stats = fbref.read_player_season_stats(stat_type="standard")
     fbref_teams = player_stats.index.get_level_values("team").unique().tolist()
 
