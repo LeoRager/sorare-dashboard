@@ -12,3 +12,4 @@ streamlit
 setuptools
 sqlalchemy
 thefuzz
+rich==13.9.4
