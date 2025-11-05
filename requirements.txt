@@ -1,3 +1,4 @@
+pip>=25
 bcrypt
 requests
 gql
@@ -12,4 +13,4 @@ streamlit
 setuptools
 sqlalchemy
 thefuzz
-rich==13.9.4
+
