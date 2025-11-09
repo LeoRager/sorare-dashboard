@@ -1,33 +1,3 @@
-# put this at the very top of your app, before importing or instantiating SoccerData classes
-import cloudscraper
-from soccerdata._common import BaseRequestsReader
-
-def _init_session_with_headers(self) -> cloudscraper.CloudScraper:
-    session = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "linux", "mobile": False}
-    )
-    # reuse SoccerData proxy handling if you provide one
-    session.proxies.update(self.proxy())
-
-    # important headers that help on Streamlit Cloud
-    session.headers.update({
-        "user-agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
-        ),
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "accept-language": "en-GB,en;q=0.9",
-        "sec-ch-ua": "\"Not A Brand\";v=\"99\", \"Chromium\";v=\"138\", \"Google Chrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"Linux\"",
-        "referer": "https://fbref.com/",
-        "upgrade-insecure-requests": "1",
-    })
-    return session
-
-# monkey patch the base reader so all SoccerData scrapers inherit this
-BaseRequestsReader._init_session = _init_session_with_headers
-
 import pandas as pd
 import numpy as np
 import soccerdata as sd
@@ -60,51 +30,67 @@ def calculate_avg_xG_conceded(df):
     return df
 
 
+def build_team_map(sorare_teams, fbref_teams, data_provider, threshold: int = 80) -> dict:
+    hardcoded_fbref = {
+        "RCD Espanyol de Barcelona": "Espanyol",
+        "Stade Rennais F.C.": "Rennes",
+        "Real Valladolid CF": "Valladolid",
+        "Paris Saint-Germain": "Paris S-G",
+        "Romania": np.nan
+    }
+
+    hardcoded_understat = {
+        "1. FC Köln": "FC Cologne",
+        "D. Alavés": "Alaves",
+        "Stade Rennais F.C.": "Rennes",
+    }
+
+    # Choose the correct hardcoded dictionary based on the provider
+    if data_provider == "fbref":
+        hardcoded = hardcoded_fbref
+    elif data_provider == "understat":
+        hardcoded = hardcoded_understat
+    else:
+        hardcoded = {}
+
+    team_map = {}
+    for sorare_team in sorare_teams:
+        if sorare_team in hardcoded:
+            team_map[sorare_team] = hardcoded[sorare_team]
+            continue
+        match_name = sorare_team
+        for token in ["FC", "F.C.", "RC", "CF", "RCD"]:
+            match_name = match_name.replace(token, "")
+        match_name = match_name.strip()
+        best_match, score = process.extractOne(match_name, fbref_teams)
+        team_map[sorare_team] = best_match if score >= threshold else None
+    return team_map
+
+
+def match_player(row, data_index, threshold: int = 85):
+    if pd.isna(row["data_team"]):
+        return None
+    candidates = data_index.loc[data_index["team"] == row["data_team"], "player"].tolist()
+    if not candidates:
+        return None
+    target_name = f"{row['first_name']} {row['last_name']}"
+    best_match, score = process.extractOne(target_name, candidates)
+    return best_match if score >= threshold else None
+
+
 def get_fbref_stats(df: pd.DataFrame, season="2025-26"):
     fbref = sd.FBref(leagues=["Big 5 European Leagues Combined"], seasons=[season])
     player_stats = fbref.read_player_season_stats(stat_type="standard")
     fbref_teams = player_stats.index.get_level_values("team").unique().tolist()
 
-    def build_team_map(sorare_teams, fbref_teams, threshold: int = 80) -> dict:
-        hardcoded = {
-            "RCD Espanyol de Barcelona": "Espanyol",
-            "Stade Rennais F.C.": "Rennes",
-            "Real Valladolid CF": "Valladolid",
-            "Paris Saint-Germain": "Paris S-G",
-            "Romania": np.nan
-        }
-
-        team_map = {}
-        for sorare_team in sorare_teams:
-            if sorare_team in hardcoded:
-                team_map[sorare_team] = hardcoded[sorare_team]
-                continue
-            match_name = sorare_team
-            for token in ["FC", "F.C.", "RC", "CF", "RCD"]:
-                match_name = match_name.replace(token, "")
-            match_name = match_name.strip()
-            best_match, score = process.extractOne(match_name, fbref_teams)
-            team_map[sorare_team] = best_match if score >= threshold else None
-        return team_map
-
     all_sorare_teams = pd.concat([df["team"], df["next_game"]]).unique().tolist()
-    team_map = build_team_map(all_sorare_teams, fbref_teams)
-    df["fbref_team"] = df["team"].map(team_map)
+    team_map = build_team_map(all_sorare_teams, fbref_teams, data_provider="fbref")
+    df["data_team"] = df["team"].map(team_map)
 
     fbref_index = player_stats.index.to_frame(index=False)[["player", "team"]]
 
-    def match_player(row, threshold: int = 85):
-        if pd.isna(row["fbref_team"]):
-            return None
-        candidates = fbref_index.loc[fbref_index["team"] == row["fbref_team"], "player"].tolist()
-        if not candidates:
-            return None
-        target_name = f"{row['first_name']} {row['last_name']}"
-        best_match, score = process.extractOne(target_name, candidates)
-        return best_match if score >= threshold else None
-
-    df["fbref_name"] = df.apply(match_player, axis=1)
-    df = df.dropna(subset=["fbref_name"])
+    df["data_name"] = df.apply(match_player, axis=1, data_index=fbref_index)
+    df = df.dropna(subset=["data_name"])
 
     def extract_data(player_stats):
         cols_to_keep = [
@@ -121,7 +107,7 @@ def get_fbref_stats(df: pd.DataFrame, season="2025-26"):
 
     df = df.merge(
         stats_subset,
-        left_on=["fbref_name", "fbref_team"],
+        left_on=["data_name", "data_team"],
         right_on=["player", "team"],
         how="left"
     ).drop(columns=["player", "team_y"])
@@ -133,7 +119,7 @@ def get_fbref_stats(df: pd.DataFrame, season="2025-26"):
     vs_team_stats_subset.columns = ['league', 'season', 'team', 'npxG_against_p90']
     vs_team_stats_subset['team'] = vs_team_stats_subset['team'].str[3:]
 
-    df["fbref_next_game_team"] = df["next_game"].map(team_map)
+    df["data_next_game_team"] = df["next_game"].map(team_map)
     vs_team_stats_subset = calculate_avg_xG_conceded(vs_team_stats_subset)
 
     # Get team_90s
@@ -143,19 +129,136 @@ def get_fbref_stats(df: pd.DataFrame, season="2025-26"):
 
     df = df.merge(
         vs_team_stats_subset,
-        left_on="fbref_next_game_team",
+        left_on="data_next_game_team",
         right_on="team",
         how="left"
     ).drop(columns=["team_y", "league_y", "season_y", "league_x", "season_x"])
 
     df = df.merge(
         team_stats_subset,
-        left_on="fbref_team",
+        left_on="data_team",
         right_on="team",
         how="left"
     ).drop(columns=["team", "league", "season"])
 
     df.rename(columns={"team_x": "team"}, inplace=True)
+
+    return df
+
+
+def get_understat_stats(
+    df: pd.DataFrame,
+    season="2025-26",
+    leagues=None,
+):
+    """
+    Mirror of get_fbref_stats but powered by Understat through soccerdata.
+    Returns a dataframe that keeps the same columns expected by analyse_players.
+    """
+    # Defaults to the big five leagues if none were provided
+    if leagues is None:
+        leagues = [
+            "ENG-Premier League",
+            "ESP-La Liga",
+            "GER-Bundesliga",
+            "ITA-Serie A",
+            "FRA-Ligue 1",
+        ]
+
+    understat = sd.Understat(leagues=leagues, seasons=[season])
+    # Player season level stats
+    player_stats = understat.read_player_season_stats().reset_index()
+
+    # Build a mapping between Sorare team names and Understat team names
+    understat_teams = player_stats["team"].dropna().unique().tolist()
+    all_sorare_teams = pd.concat([df["team"], df["next_game"]]).dropna().unique().tolist()
+    team_map = build_team_map(all_sorare_teams, understat_teams, data_provider="understat")
+    df["data_team"] = df["team"].map(team_map)
+
+    us_index = player_stats[['team', 'player']]
+    df["data_name"] = df.apply(match_player, axis=1, data_index=us_index)
+    df = df.dropna(subset=["data_name"])
+
+    stats_subset = player_stats[
+        ["league", "season", "team", "player", "np_xg", "xa", "minutes", "matches"]
+    ].copy()
+
+    stats_subset["npxG+xAG"] = stats_subset["np_xg"].fillna(0) + stats_subset["xa"].fillna(0)
+    stats_subset["90s"] = stats_subset["minutes"].fillna(0) / 90.0
+    stats_subset["npxG+xAG_p90"] = np.where(
+        stats_subset["minutes"].fillna(0) > 0,
+        stats_subset["npxG+xAG"] / (stats_subset["minutes"] / 90.0),
+        0.0,
+    )
+    stats_subset["Starts"] = 0
+
+    # Merge player season stats on name and team
+    df = df.merge(
+        stats_subset,
+        left_on=["data_name", "data_team"],
+        right_on=["player", "team"],
+        how="left",
+    ).drop(columns=["player", "team_y"])
+    df.rename(columns={"team_x": "team"}, inplace=True)
+
+    team_stats = understat.read_team_match_stats().reset_index()
+
+    # Aggregate directly by team to avoid building a full long-form table
+    home_conceded = (
+        team_stats.groupby(["league", "season", "home_team"], as_index=False)
+        .agg(conceded_np_xg=("away_np_xg", "median"), team_90s=("away_np_xg", "size"))
+        .rename(columns={"home_team": "team"})
+    )
+
+    away_conceded = (
+        team_stats.groupby(["league", "season", "away_team"], as_index=False)
+        .agg(conceded_np_xg=("home_np_xg", "median"), team_90s=("home_np_xg", "size"))
+        .rename(columns={"away_team": "team"})
+    )
+
+    team_conceded = pd.concat([home_conceded, away_conceded], ignore_index=True)
+
+    team_conceded = (
+        team_conceded.groupby(["league", "season", "team"], as_index=False)
+        .agg(
+            npxG_against_p90=("conceded_np_xg", "median"),
+            team_90s=("team_90s", "sum")
+        )
+    )
+
+    # Add league average conceded for scaling
+    conceded_for_merge = calculate_avg_xG_conceded(team_conceded[["league", "season", "team", "npxG_against_p90"]])
+
+    # Map the next opponent to Understat team names and merge opponent strength
+    df["data_next_game_team"] = df["next_game"].map(team_map)
+
+    df = df.merge(
+        conceded_for_merge,
+        left_on="data_next_game_team",
+        right_on="team",
+        how="left",
+    ).drop(columns=["team_y", "league_y", "season_y", "league_x", "season_x"])
+
+    # Merge team 90s for playing time filter
+    df = df.merge(
+        team_conceded[["league", "season", "team", "team_90s"]],
+        left_on="data_team",
+        right_on="team",
+        how="left",
+    ).drop(columns=["team", "league", "season"])
+
+    df.rename(columns={"team_x": "team"}, inplace=True)
+
+    # Drop the following columns: np_xg, xa, minutes, matches
+    df = df.drop(columns=["np_xg", "xa", "minutes", "matches"])
+
+    # move npxg+xag_p90 to the 11th column
+    cols = df.columns.tolist()
+
+    # Remove and reinsert at position 10 (11th place)
+    cols.insert(10, cols.pop(cols.index("npxG+xAG_p90")))
+
+    df = df[cols]
 
     return df
 
@@ -198,7 +301,7 @@ def analyse_players(
     filtered["prob_scoring"] = 1 - np.exp(-filtered["adjusted_xG"])
 
     # Drop unnecessary columns
-    drop_cols = ["fbref_team", "rarity", "next_game_date", "fbref_name", "fbref_next_game_team",
+    drop_cols = ["data_team", "rarity", "next_game_date", "data_name", "data_next_game_team",
                  "avg_xG_conceded_league", "team_90s", "adjusted_xG", "odds_reliability"]
     filtered = filtered.drop(columns=[c for c in drop_cols if c in filtered.columns])
 
@@ -257,13 +360,13 @@ def main():
         return
 
     token = sign_in_result["jwtToken"]["token"]
-    # print("Fetching your cards and analysing data...")
-    #
-    # cards = fetch_owned_cards(token, AUD, page_size=50)
-    # df = pd.DataFrame(cards)
-    # df = clean_data(df)
-    # df = get_fbref_stats(df)
-    # filtered_df = analyse_players(df)
+    print("Fetching your cards and analysing data...")
+
+    cards = fetch_owned_cards(token, AUD, page_size=50)
+    df = pd.DataFrame(cards)
+    df = clean_data(df)
+    df = get_understat_stats(df)
+    filtered_df = analyse_players(df)
     #
     # print("\n=== Top Players Analysis ===")
     # print(filtered_df.to_string(index=False))

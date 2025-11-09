@@ -83,6 +83,13 @@ if st.session_state.step == 3 and st.session_state.token:
     with tab_decisive:
         st.subheader("Adjust player filters")
 
+        # Choose data provider
+        provider = st.radio(
+            "Data source",
+            options=["FBref", "Understat"],
+            horizontal=True
+        )
+
         min_nineties_ratio = st.slider(
             "Available Minutes Played percent",
             0.0, 100.0, 65.0, 1.0
@@ -123,7 +130,12 @@ if st.session_state.step == 3 and st.session_state.token:
 
                 df = pd.DataFrame(cards)
                 df = clean_data(df)
-                df = get_fbref_stats(df)
+
+                if provider == "Understat":
+                    df = get_understat_stats(df)
+                else:
+                    df = get_fbref_stats(df)
+
                 filtered_df = analyse_players(
                     df,
                     min_nineties_ratio=min_nineties_ratio / 100,
